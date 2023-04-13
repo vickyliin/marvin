@@ -39,7 +39,8 @@ DEFAULT_NAME = "Marvin"
 DEFAULT_DESCRIPTION = "A Marvin bot"
 DEFAULT_PERSONALITY = "A helpful assistant that is clever, witty, and fun."
 DEFAULT_INSTRUCTIONS = """
-    Respond to the user, always in character based on your personality.
+    Respond to the user, always in character based on your personality. Use
+    plugins whenever you need additional information.
     """
 
 
@@ -76,17 +77,8 @@ DEFAULT_INSTRUCTIONS_TEMPLATE = """
     personality is: {{ personality }}
     
     {% if plugins %}
-    {{ plugin_instructions }}
-    {% endif %}
+    # Plugins
     
-    # Notes
-    
-    {% if date -%} Your training ended in 2021 but today's date is {{ date }}.
-    {%- endif %}
-    """
-
-PLUGIN_INSTRUCTIONS = condense_newlines(
-    """                
     You have access to plugins that can enhance your knowledge and capabilities.
     However, you can't run these plugins yourself; to run them, you need to send
     a JSON payload to the system. The system will run the plugin with that
@@ -115,8 +107,15 @@ PLUGIN_INSTRUCTIONS = condense_newlines(
     
     {% endfor -%}
 
+    {% endif %}
+    
+    # Notes
+    
+    {% if date -%} 
+    Your training ended in the past. Today's date is {{ date }}.
+    {%- endif %}
     """
-)
+
 DEFAULT_PLUGINS = [
     marvin.plugins.web.VisitURL(),
     marvin.plugins.duckduckgo.DuckDuckGo(),
@@ -393,9 +392,10 @@ class Bot(MarvinBaseModel, LoggerMixin):
                 elif on_error == "raise":
                     raise exc
                 elif on_error == "reformat":
-                    self.logger.debug(
-                        "Response did not pass validation. Attempted to reformat:"
-                        f" {llm_response}"
+                    self.logger.debug_kv(
+                        "Response did not pass validation. Attempted to reformat",
+                        f" {llm_response}",
+                        key_style="red",
                     )
                     llm_response = _reformat_response(
                         llm_response=llm_response,
@@ -438,7 +438,7 @@ class Bot(MarvinBaseModel, LoggerMixin):
                 return response
 
             else:
-                messages = await self._prepare_loop_response(response, messages)
+                messages = await self._prepare_loop_messages(response, messages)
                 if not messages:
                     return response
 
@@ -469,7 +469,6 @@ class Bot(MarvinBaseModel, LoggerMixin):
             response_format = self.response_format
 
         jinja_instructions = jinja_env.from_string(self.instructions)
-        jinja_plugin_instructions = jinja_env.from_string(PLUGIN_INSTRUCTIONS)
 
         # prepare instructions variables
         vars = dict(
@@ -484,7 +483,6 @@ class Bot(MarvinBaseModel, LoggerMixin):
         bot_instructions = jinja_env.from_string(self.instructions_template).render(
             **vars,
             instructions=jinja_instructions.render(**vars),
-            plugin_instructions=jinja_plugin_instructions.render(**vars),
         )
 
         return Message(role="system", content=bot_instructions)
@@ -515,7 +513,9 @@ class Bot(MarvinBaseModel, LoggerMixin):
 
         if marvin.settings.verbose:
             messages_repr = "\n".join(repr(m) for m in langchain_messages)
-            self.logger.debug(f"Sending messages to LLM: {messages_repr}")
+            self.logger.debug_kv(
+                "Sending messages to LLM", messages_repr, key_style="green"
+            )
         try:
             result = await llm.agenerate(messages=[langchain_messages])
         except InvalidRequestError as exc:
@@ -565,7 +565,7 @@ class Bot(MarvinBaseModel, LoggerMixin):
         """
         return as_sync_fn(cls.load)(*args, **kwargs)
 
-    async def _prepare_loop_response(
+    async def _prepare_loop_messages(
         self, response: BotResponse, messages: list[Message]
     ) -> list[Message]:
         if match := PLUGIN_REGEX.search(response.content):
